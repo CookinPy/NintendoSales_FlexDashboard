@@ -1,0 +1,445 @@
+---
+title: "Nintendo Switch Sales"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: row
+    vertical_layout: fill
+---
+
+<style type="text/css">
+
+.navbar-inverse .navbar-nav>.active>a, .navbar-inverse .navbar-nav>.active>a:hover, .navbar-inverse .navbar-nav>.active>a:focus {
+color: #3b67f5;
+background-color: #303030;
+border-color: #002a4c;
+font-weight: 900;
+}
+
+.chart-title {
+    border-bottom: 1px solid #d7d7d7;
+    color: #3b67f5;
+    font-size: 20px;
+    font-weight: 700;
+    padding: 7px 10px 4px;
+}
+
+.heading-level1 {  /* chart_title  */
+   color: #00467f;
+    font-size: 18px;
+    font-weight: 500;
+}
+
+h4, .h4 {
+   color: #002a4c;
+    font-size: 15px;
+    font-weight: 550;
+}
+
+a:visited {
+   color: rgb(50%, 0%, 50%);
+}
+
+</style>
+
+
+```{r}
+#import libraries
+library(flexdashboard)
+library(ggthemes)
+library(ggrepel)
+library(ggplot2)
+library(scales)
+library(readxl)
+library(tidyr)
+library(dplyr)
+library(data.table)
+library(stats)
+library(xts)
+
+###### DATA CLEANING + PREP ######
+#Read Data
+myData <- read_excel("NintendoSwitchSales.xls")
+#Rename Columns
+colnames(myData) <- c("Platform", 'Metric', '2017', '2018', '2019', '2020')
+#Drop Metric Column
+df = subset(myData, select = -c(Metric) )
+#Multiply yearly stats by 10,000
+df[] = lapply(df, FUN = function(x) if (is.numeric(x)) return(x * 10000) else return(x))
+#Remove string 'Nintendo Switch ' from Platform column
+df$Platform <- gsub("Nintendo Switch ","",as.character(df$Platform))
+#Separate Platform Column into Platform and Region
+df <- separate(data = df, col = Platform, into = c("Platform", "Region"), sep = "/")
+#Convert data from wide to long
+df <- gather(df, Year, Sales, '2017':'2020', factor_key=TRUE)
+
+# Data Prep for first page
+hardware <- subset(df, Platform == 'hardware')
+software <- subset(df, Platform == 'software')
+
+hardware <- hardware %>% 
+  group_by(Year) %>% 
+  summarise(YearTotal = sum(Sales))
+
+software <- software %>% 
+  group_by(Year) %>% 
+  summarise(YearTotal = sum(Sales))
+
+hardware$Cumulative <- cumsum(hardware$YearTotal)
+software$Cumulative <- cumsum(software$YearTotal)
+
+hardware <- hardware %>% mutate(Platform = 'hardware')
+software <- software %>% mutate(Platform = 'software')
+
+platformDf <- rbind(hardware, software) 
+
+# Data prep for second page
+region1 <- subset(df, Region == 'The Americas')
+region2 <- subset(df, Region == 'Europe')
+region3 <- subset(df, Region == 'Japan')
+region4 <- subset(df, Region == 'Other')
+
+region1 <- region1 %>% 
+  group_by(Year) %>% 
+  summarise(YearTotal = sum(Sales))
+
+region2 <- region2 %>% 
+  group_by(Year) %>% 
+  summarise(YearTotal = sum(Sales))
+
+region3 <- region3 %>% 
+  group_by(Year) %>% 
+  summarise(YearTotal = sum(Sales))
+
+region4 <- region4 %>% 
+  group_by(Year) %>% 
+  summarise(YearTotal = sum(Sales))
+
+# Create cumulative column
+region1$Cumulative <- cumsum(region1$YearTotal)
+region2$Cumulative <- cumsum(region2$YearTotal)
+region3$Cumulative <- cumsum(region3$YearTotal)
+region4$Cumulative <- cumsum(region4$YearTotal)
+
+region1 <- region1 %>% mutate(Region = 'The Americas')
+region2 <- region2 %>% mutate(Region = 'Europe')
+region3 <- region3 %>% mutate(Region = 'Japan')
+region4 <- region4 %>% mutate(Region = 'Other')
+
+# need data.table format to create growth column
+setDT(region1)
+setDT(region2)
+setDT(region3)
+setDT(region4)
+
+# Create growth column
+region1[ , Growth := round((((YearTotal - shift(YearTotal)) / shift(YearTotal)) * 100), 1)]
+region2[ , Growth := round((((YearTotal - shift(YearTotal)) / shift(YearTotal)) * 100), 1)]
+region3[ , Growth := round((((YearTotal - shift(YearTotal)) / shift(YearTotal)) * 100), 1)]
+region4[ , Growth := round((((YearTotal - shift(YearTotal)) / shift(YearTotal)) * 100), 1)]
+
+# sets na's to zero
+region1[is.na(region1)] <- 0
+region2[is.na(region2)] <- 0
+region3[is.na(region3)] <- 0
+region4[is.na(region4)] <- 0
+
+# combine 4 regions into new df
+regionDf <- rbind(region1, region2, region3, region4)
+
+totalSalesDf <- df %>% 
+  group_by(Year) %>% 
+  summarise(YearTotal = sum(Sales))
+
+# Exponential Prediction Model using Holt Winters with beta and gamma off
+tsdf <- ts(totalSalesDf$YearTotal, frequency=1, start=c(2017))
+modell <- HoltWinters(tsdf, beta = FALSE, gamma = FALSE)
+pred <- predict(modell, prediction.interval = TRUE)
+
+ts_pred <- ts(c(modell$fitted[, 1], pred), start = 2017, frequency = 1)
+testdf <- merge(as.xts(ts_pred), as.xts(tsdf))
+names(testdf) <- c("predicted", "actual")
+
+totalSalesDf$Year <- as.numeric(as.character(totalSalesDf$Year))
+```
+<!-- ######################################################################################################## -->
+<!-- FIRST PAGE -->
+<!-- ######################################################################################################## -->
+Platform Sales
+===
+
+Row
+---
+### Overall Sales {.value-box}
+
+```{r}
+totalSales <- sum(df['Sales'])
+totalSales <- paste(format(round(totalSales / 1e6, 1), trim = TRUE), "M")
+valueBox(totalSales, caption = 'Total Sales (Units)', icon="fa-dollar-sign", color = '#5cbd71')
+```
+
+### Software Sales {.value-box}
+
+```{r}
+software <- subset(df, Platform == 'software')
+softwareSales <- sum(software$Sales)
+softwareSales <- paste(format(round(softwareSales / 1e6, 1), trim = TRUE), "M")
+valueBox(softwareSales, caption = 'Total Software Sales (Units)', icon="fa-compact-disc", color = '#3643ff')
+```
+
+### Hardware Sales {.value-box}
+
+```{r}
+hardware <- subset(df, Platform == 'hardware')
+hardwareSales <- sum(hardware$Sales)
+hardwareSales <- paste(format(round(hardwareSales / 1e6, 1), trim = TRUE), "M")
+valueBox(hardwareSales, caption = 'Total Hardware Sales (Units)', icon="fa-desktop", color = '#bd5c5c')
+```
+
+
+Row
+---
+
+
+### Cumulative Sales
+
+```{r}
+p <- ggplot(platformDf, aes(x = as.numeric(Year), y = Cumulative))
+p + geom_area(aes(fill = Platform, color = Platform), alpha = 0.4) +
+  scale_y_continuous(labels = unit_format(unit = "M", scale = 1e-6)) +
+  scale_x_continuous(labels = c('2017', '2018', '2019', '2020')) +
+  labs( title = 'Cumulative Platform Revenue', y = 'Total Sales (Units)', x = 'Fiscal Year' )
+```
+
+
+### Yearly Sales
+
+```{r}
+p <- ggplot(data = df)
+p + geom_bar(stat = 'identity', aes(x = Year, y = Sales, fill = Platform), alpha = 0.7) +
+  theme_grey() +
+  theme(legend.position = 'none') +
+  scale_y_continuous(labels = unit_format(unit = "M", scale = 1e-6)) +
+  labs( title = 'Yearly Platform Revenue', y = 'Total Sales (Units)', x = 'Fiscal Year' )
+
+```
+
+<!-- ######################################################################################################## -->
+<!-- SECOND PAGE -->
+<!-- ######################################################################################################## -->
+Regional Sales
+===
+
+Row
+---
+
+### Region1 {.value-box}
+
+```{r}
+r1max <- max(region1$Cumulative)
+softwareSales <- paste(format(round(r1max / 1e6, 1), trim = TRUE), "M")
+valueBox(softwareSales, caption = 'The Americas Sales (Units)', icon="fa-earth-americas", color = '#9959b5')
+```
+
+### Region2 {.value-box}
+
+```{r}
+r2max <- max(region2$Cumulative)
+softwareSales <- paste(format(round(r2max / 1e6, 1), trim = TRUE), "M")
+valueBox(softwareSales, caption = 'Europe Sales (Units)', icon="fa-earth-europe", color = '#3abdc2')
+```
+
+### Region3 {.value-box}
+
+```{r}
+r3max <- max(region3$Cumulative)
+softwareSales <- paste(format(round(r3max / 1e6, 1), trim = TRUE), "M")
+valueBox(softwareSales, caption = 'Japan Sales (Units)', icon="fa-earth-asia", color = '#7eb362')
+```
+
+### Region4 {.value-box}
+
+```{r}
+r4max <- max(region4$Cumulative)
+softwareSales <- paste(format(round(r4max / 1e6, 1), trim = TRUE), "M")
+valueBox(softwareSales, caption = 'Other Sales (Units)', icon="fa-earth-oceania", color = '#bd6a6a')
+```
+
+Row
+---
+
+### Cumulative Sales
+
+```{r}
+p <- ggplot(regionDf, aes(x = as.numeric(Year), y = Cumulative))
+p + geom_area(aes(fill = factor(Region, levels=c("Other", "Japan", "Europe", "The Americas")), color = factor(Region, levels=c("Other", "Japan", "Europe", "The Americas"))), alpha = 0.4) +
+  scale_y_continuous(labels = unit_format(unit = "M", scale = 1e-6)) +
+  scale_x_continuous(labels = c('2017', '2018', '2019', '2020')) +
+  labs( title = 'Cumulative Regional Revenue', y = 'Total Sales (Units)', x = 'Fiscal Year', fill = 'Region', colour = 'Region' )
+```
+
+### Yearly Sales
+
+```{r}
+p <- ggplot(data = df)
+p + geom_bar(stat = 'identity', aes(x = Year, y = Sales, fill = factor(Region, levels=c("Other", "Japan", "Europe", "The Americas"))), alpha = 0.7) +
+  theme_grey() +
+  theme(legend.position = 'none') +
+  scale_y_continuous(labels = unit_format(unit = "M", scale = 1e-6)) +
+  labs( title = 'Yearly Regional Revenue', y = 'Total Sales (Units)', x = 'Fiscal Year' )
+
+```
+
+
+<!-- ######################################################################################################## -->
+<!-- THIRD PAGE -->
+<!-- ######################################################################################################## -->
+Regional Growth
+===
+
+Row
+---
+### Growth in The Americas
+
+```{r}
+endPoint <- region1 %>% filter(Year == 2020)
+
+p <- ggplot(region1, aes(x = as.numeric(Year), y = Growth))
+p + geom_line(stat = 'identity') +
+  geom_point(stat = 'identity') +
+  theme_grey() +
+  theme(legend.position = 'none') +
+  scale_x_continuous(labels = c('2017', '2018', '2019', '2020')) +
+  labs( title = 'The Americas\' Year over Year Growth', y = 'Growth (%)', x = 'Fiscal Year' ) +
+  geom_text_repel(aes(label = Growth), data = endPoint, fontface ="plain", color = "black", size = 4, nudge_y = -2)
+```
+
+### Growth in Europe
+
+```{r}
+endPoint <- region2 %>% filter(Year == 2020)
+
+p <- ggplot(region2, aes(x = as.numeric(Year), y = Growth))
+p + geom_line(stat = 'identity') +
+  geom_point(stat = 'identity') +
+  theme_grey() +
+  theme(legend.position = 'none') +
+  scale_x_continuous(labels = c('2017', '2018', '2019', '2020')) +
+  labs( title = 'Europe\'s Year over Year Growth', y = 'Growth (%)', x = 'Fiscal Year' ) +
+  geom_text_repel(aes(label = Growth), data = endPoint, fontface ="plain", color = "black", size = 4, nudge_y = -2)
+```
+
+Row
+---
+### Growth in Japan
+
+```{r}
+endPoint <- region3 %>% filter(Year == 2020)
+
+p <- ggplot(region3, aes(x = as.numeric(Year), y = Growth))
+p + geom_line(stat = 'identity') +
+  geom_point(stat = 'identity') +
+  theme_grey() +
+  theme(legend.position = 'none') +
+  scale_x_continuous(labels = c('2017', '2018', '2019', '2020')) +
+  labs( title = 'Japan\'s Year over Year Growth', y = 'Growth (%)', x = 'Fiscal Year' ) +
+  geom_text_repel(aes(label = Growth), data = endPoint, fontface ="plain", color = "black", size = 4, nudge_y = -2)
+```
+
+### Growth in Other Regions
+
+```{r}
+endPoint <- region4 %>% filter(Year == 2020)
+
+p <- ggplot(region4, aes(x = as.numeric(Year), y = Growth))
+p + geom_line(stat = 'identity') +
+  geom_point(stat = 'identity') +
+  theme_grey() +
+  theme(legend.position = 'none') +
+  scale_x_continuous(labels = c('2017', '2018', '2019', '2020')) +
+  labs( title = 'Other Regions\' Year over Year Growth', y = 'Growth (%)', x = 'Fiscal Year' ) +
+  geom_text_repel(aes(label = Growth), data = endPoint, fontface ="plain", color = "black", size = 4, nudge_y = -2)
+```
+
+<!-- ######################################################################################################## -->
+<!-- FOURTH PAGE -->
+<!-- ######################################################################################################## -->
+Predicted Sales
+===
+
+Row
+---
+
+
+### Linear 2021 Sales {.value-box}
+
+
+```{r}
+lmodel <- lm(YearTotal ~ Year, data = totalSalesDf)
+l2021 <- as.numeric(predict(lmodel, data.frame(Year = 2021)))
+l2021 <- paste(format(round(l2021 / 1e6, 1), trim = TRUE), "M")
+valueBox(l2021, caption = 'Linear 2021 Sales (Units)', icon="fa-earth-oceania", color = '#5cbd71')
+```
+
+### Linear 2022 Sales {.value-box}
+
+
+```{r}
+lmodel <- lm(YearTotal ~ Year, data = totalSalesDf)
+l2022 <- predict(lmodel, data.frame(Year = 2022))
+l2022 <- paste(format(round(l2022 / 1e6, 1), trim = TRUE), "M")
+valueBox(l2022, caption = 'Linear 2022 Sales (Units)', icon="fa-earth-oceania", color = '#5cbd71')
+```
+
+### Exponential 2021 Sales {.value-box}
+
+
+```{r}
+e2021 <- testdf[5,1]
+e2021 <- paste(format(round(e2021 / 1e6, 1), trim = TRUE), "M")
+valueBox(e2021, caption = 'Exponential 2021 Sales (Units)', icon="fa-earth-oceania", color = '#5cbd71')
+```
+
+### Exponential 2022 Sales {.value-box}
+
+
+```{r}
+e2022 <- testdf[6,1]
+e2022 <- paste(format(round(e2022 / 1e6, 1), trim = TRUE), "M")
+valueBox(e2022, caption = 'Exponential 2022 Sales (Units)', icon="fa-earth-oceania", color = '#bd6a6a')
+```
+
+
+Row
+---
+
+
+### Predicted Sales Linear
+
+
+```{r}
+
+p <- ggplot()
+p + geom_line(totalSalesDf, mapping = aes(x = Year, y = YearTotal), stat = 'identity', size = 1.1) +
+  geom_point(totalSalesDf, mapping = aes(x = Year, y = YearTotal), stat = 'identity', size = 1.1) +
+  theme_grey() +
+  geom_smooth(totalSalesDf, mapping = aes(x = Year, y = YearTotal), method = "lm", se = FALSE, fullrange=TRUE, alpha = 0.4, linetype = "dashed") +
+  theme(legend.position = 'none') +
+  scale_y_continuous(labels = unit_format(unit = "M", scale = 1e-6)) +
+  labs( title = '2 Year Sales Linear Forecast', y = 'Total Sales (Units)', x = 'Fiscal Year') +
+  geom_vline(xintercept=2020, linetype="dashed") +
+  xlim(2017,2022)
+```
+
+
+### Predicted Sales Exponential
+
+
+```{r}
+ggplot(testdf, aes(x=as.POSIXct(index(testdf)))) +
+  geom_line(aes(y=predicted), col='red') +
+  geom_line(aes(y=actual), col='black') +
+  scale_y_continuous(labels = unit_format(unit = "M", scale = 1e-6)) +
+  theme_grey() +
+  geom_vline(xintercept=as.numeric(as.POSIXct(as.Date("2020-01-01", "%Y-%m-%d"))), linetype="dashed") +
+  labs( title = '2 Year Sales Exponential Forecast', y = 'Total Sales (Units)', x = 'Fiscal Year')
+```
